@@ -1,0 +1,25 @@
+# Import the necessary packages and modules
+import matplotlib.pyplot as plt
+import numpy as np
+# Use a specific style file (adjust the path if needed)
+# plt.style.use('../../matplotlib/sci.mplstyle') 
+# Open and read the file calc-kpoint.dat
+# Ensure 'calc-kpoint.dat' is in the same directory as this script
+kp, ener = np.loadtxt('calc-kpoint.dat', delimiter=' ', unpack=True)
+# Create figure object
+plt.figure()
+# Plot the data, using scatter plot
+plt.scatter(kp, ener, s=150)
+# Plot a dashed line at 14x14x1 (ener[10] refers to the 11th data point)
+plt.axhline(ener[10], c='gray', ls='--')
+# Add the x and y-axis labels
+# Note: Using r'' (raw string) to handle the LaTeX backslash correctly
+plt.xlabel(r'Number of $\bm k$-points')
+plt.ylabel('Total energy (Ry)')
+# Set the axis limits
+plt.xlim(0, 200)
+plt.ylim(-23.913, -23.905)
+# Save the figure
+plt.savefig('plot-kpoint.pdf')
+# Show the figure
+plt.show()
