@@ -1,0 +1,205 @@
+#!/bin/bash
+
+# ╔══════════════════════════════════════════════════════╗
+#         Change only this section
+# ╚══════════════════════════════════════════════════════╝
+QE_INPUT_DIR="qe_input"       # Folder containing input files
+OUT_DIR="relax_scf"            # Output directory for results
+PSEUDO_DIR="./pseudos"         # Pseudopotential folder
+NPP=2                          # Number of processors (-1 for serial)
+
+ECUTWFC=60                     # Your converged ecutwfc
+ECUTRHO=480                    # Usually ECUTWFC x 8
+KPT_RELAX="6 6 6 0 0 0"       # Converged k-points for vc-relax
+KPT_SCF="8 8 8 0 0 0"         # K-points for SCF (slightly denser)
+NBND=24                        # Number of bands (for SCF)
+DFT="PBE"                      # DFT functional (PBE/RPBE/PBEsol)
+# ╚══════════════════════════════════════════════════════╝
+
+mkdir -p "$OUT_DIR"
+
+for input_file in "$QE_INPUT_DIR"/*.in; do
+
+    compound_name=$(basename "$input_file" .in)
+    compound_dir="$OUT_DIR/$compound_name"
+    mkdir -p "$compound_dir"
+
+    vc_relax_out="$compound_dir/${compound_name}_vc-relax.out"
+    scf_out="$compound_dir/${compound_name}_scf.out"
+
+    echo "==========================================="
+    echo " Processing: $compound_name"
+    echo "==========================================="
+
+    # ── Parse input file ───────────────────────────────────
+    cell_parameters=()
+    atomic_species=()
+    atomic_positions=()
+    recording_atomic_species=false
+    recording_atomic_positions=false
+
+    while IFS= read -r line; do
+        if [[ "$line" == *"CELL_PARAMETERS"* ]]; then
+            recording_atomic_species=false
+            recording_atomic_positions=false
+            continue
+        fi
+        if [[ "$line" == *"ATOMIC_SPECIES"* ]]; then
+            recording_atomic_species=true
+            continue
+        fi
+        if [[ "$line" == *"ATOMIC_POSITIONS"* ]]; then
+            recording_atomic_positions=true
+            recording_atomic_species=false
+            continue
+        fi
+        if $recording_atomic_species && [[ -n "$line" && "$line" =~ [^[:space:]] ]]; then
+            atomic_species+=("$line")
+            continue
+        fi
+        if $recording_atomic_positions; then
+            atomic_positions+=("$line")
+            continue
+        fi
+        if [[ ${#cell_parameters[@]} -lt 3 ]]; then
+            cell_parameters+=("$line")
+        fi
+    done < "$input_file"
+
+    nat=${#atomic_positions[@]}
+
+    # ── Write VC-Relax input file ──────────────────────────
+    vc_relax_input_file="$compound_dir/${compound_name}_vc-relax.in"
+
+    cat > "$vc_relax_input_file" << EOF
+&CONTROL
+  calculation = 'vc-relax'
+  outdir = '$compound_dir'
+  prefix = '$compound_name'
+  pseudo_dir = '$PSEUDO_DIR'
+  restart_mode = 'from_scratch'
+  verbosity = 'high'
+  forc_conv_thr = 1.0d-5
+/
+&SYSTEM
+  ibrav = 0
+  nat = $nat
+  ntyp = ${#atomic_species[@]}
+  ecutwfc = $ECUTWFC
+  ecutrho = $ECUTRHO
+  input_dft = '$DFT'
+/
+&ELECTRONS
+  conv_thr = 1.0D-8
+  mixing_beta = 0.7
+/
+&IONS
+  ion_dynamics = 'bfgs'
+/
+&CELL
+  cell_dynamics = 'bfgs'
+  press = 0.0
+  cell_factor = 2.0
+/
+ATOMIC_SPECIES
+$(printf "%s\n" "${atomic_species[@]}")
+
+ATOMIC_POSITIONS (angstrom)
+$(printf "%s\n" "${atomic_positions[@]}")
+
+CELL_PARAMETERS (angstrom)
+$(printf "%s\n" "${cell_parameters[@]}")
+
+K_POINTS automatic
+$KPT_RELAX
+EOF
+
+    # ── Run VC-Relax ───────────────────────────────────────
+    echo "$compound_name: Starting vc-relax..."
+    if [[ $NPP -eq -1 ]]; then
+        pw.x -in "$vc_relax_input_file" > "$vc_relax_out"
+    else
+        mpirun -np $NPP pw.x -in "$vc_relax_input_file" | tee "$vc_relax_out"
+    fi
+    echo "$compound_name: vc-relax done!"
+
+    # ── Extract relaxed structure ──────────────────────────
+    final_cell_parameters=""
+    final_positions=""
+    in_final_section=false
+
+    while IFS= read -r line; do
+        if [[ "$line" == *"Begin final coordinates"* ]]; then
+            in_final_section=true
+        elif [[ "$line" == *"End final coordinates"* ]]; then
+            in_final_section=false
+        fi
+
+        if $in_final_section; then
+            if [[ "$line" == *"CELL_PARAMETERS (angstrom)"* ]]; then
+                read -r line
+                for i in {1..3}; do
+                    final_cell_parameters+="$line\n"
+                    read -r line
+                done
+            elif [[ "$line" == *"ATOMIC_POSITIONS"* ]]; then
+                read -r pos_line
+                for ((i=1; i<=nat; i++)); do
+                    final_positions+="$pos_line\n"
+                    read -r pos_line
+                done
+            fi
+        fi
+    done < "$vc_relax_out"
+
+    # ── Write SCF input file ───────────────────────────────
+    scf_input_file="$compound_dir/${compound_name}_scf.in"
+
+    cat > "$scf_input_file" << EOF
+&CONTROL
+  calculation = 'scf'
+  outdir = '$compound_dir'
+  prefix = '$compound_name'
+  pseudo_dir = '$PSEUDO_DIR'
+  restart_mode = 'from_scratch'
+  verbosity = 'high'
+/
+&SYSTEM
+  ibrav = 0
+  nat = $nat
+  ntyp = ${#atomic_species[@]}
+  ecutwfc = $ECUTWFC
+  ecutrho = $ECUTRHO
+  nbnd = $NBND
+  occupations = 'fixed'
+  input_dft = '$DFT'
+/
+&ELECTRONS
+  conv_thr = 1.0D-8
+  mixing_beta = 0.7
+/
+ATOMIC_SPECIES
+$(printf "%s\n" "${atomic_species[@]}")
+
+CELL_PARAMETERS (angstrom)
+$(printf "$final_cell_parameters")
+
+ATOMIC_POSITIONS (angstrom)
+$(printf "$final_positions")
+
+K_POINTS automatic
+$KPT_SCF
+EOF
+
+    # ── Run SCF ────────────────────────────────────────────
+    echo "$compound_name: Starting SCF..."
+    if [[ $NPP -eq -1 ]]; then
+        pw.x -in "$scf_input_file" > "$scf_out"
+    else
+        mpirun -np $NPP pw.x -in "$scf_input_file" | tee "$scf_out"
+    fi
+    echo "$compound_name: SCF done!"
+
+done
+
+echo "All calculations completed!"
