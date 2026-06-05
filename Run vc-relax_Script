@@ -1,0 +1,53 @@
+ধাপ ১ — Folder Structure বানাও
+mkdir my_calculation
+cd my_calculation
+mkdir qe_input
+mkdir pseudos
+
+ধাপ ২ — Files রাখো
+my_calculation/
+├── pseudos/
+│   ├── K.upf        ← তোমার pseudopotential files
+│   ├── Cs.upf
+│   ├── I.upf
+│   └── O.upf
+└── qe_input/
+    └── K2CsIO.in    ← তোমার input file
+
+ধাপ ৩ — Script File বানাও
+nano run.sh
+
+এটা চাপলে editor খুলবে। সেখানে পুরো script (https://github.com/iSh4hriar/QE-Template-Code/blob/main/vc-relax_bash_script) টা paste করো। তারপর:
+Ctrl + O   → Save
+Enter      → Confirm
+Ctrl + X   → Exit
+
+ধাপ ৪ — Variables ঠিক করো
+Script এর উপরে এই অংশটা তোমার মতো বদলাও:
+QE_INPUT_DIR="qe_input"
+OUT_DIR="relax_scf"
+PSEUDO_DIR="./pseudos"
+NPP=2                    # তোমার PC তে কতটা core আছে
+
+ECUTWFC=60               # তোমার converged value
+ECUTRHO=480
+KPT_RELAX="6 6 6 0 0 0"
+KPT_SCF="8 8 8 0 0 0"
+NBND=24
+DFT="PBE"
+
+ধাপ ৫ — Permission দাও
+chmod +x run.sh
+
+ধাপ ৬ — Run করো
+./run.sh
+
+ধাপ ৭ — কতটুকু হলো দেখো (আরেকটা terminal এ)
+# Live output দেখতে
+tail -f relax_scf/K2CsIO/K2CsIO_vc-relax.out
+
+# Calculation শেষ হয়েছে কিনা দেখতে
+grep "JOB DONE" relax_scf/K2CsIO/K2CsIO_vc-relax.out
+
+কতটা Core আছে জানো না?
+nproc
